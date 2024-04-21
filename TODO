@@ -1,0 +1,7 @@
+- Write timeouts
+- Clear routing table before adding new entries
+- Write counters
+- Write checksums (IP, pwospf)
+- Handle all packets generally directed to the router i.e. ICMP, corrupted packets
+- Verify all requirements are met
+- Test and verify: shortest path test
