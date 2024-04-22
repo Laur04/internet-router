@@ -1,4 +1,3 @@
-from scapy.compat import Optional, Tuple
 from scapy.fields import ByteField, IntField, PacketListField, ShortField, SignedLongField
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import IP, SourceIPField
