@@ -1,7 +1,7 @@
 - Write timeouts
-- Clear routing table before adding new entries
+- Maintain sequence updates
 - Write counters
 - Write checksums (IP, pwospf)
-- Handle all packets generally directed to the router i.e. ICMP, corrupted packets
+- Handle all packets generally directed to the router i.e. ICMP
 - Verify all requirements are met
 - Test and verify: shortest path test

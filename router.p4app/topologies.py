@@ -1,5 +1,3 @@
-# Initializes various mininet topologies 
-
 from mininet.topo import Topo
 
 
@@ -18,24 +16,37 @@ class SingleSwitchTopo(Topo):
             )
             self.addLink(host, switch, port2=i)
 
+# Three switches, with three hosts each
 class TripleSwitchTopo(Topo):
     def __init__(self):
         Topo.__init__(self)
 
         switches = []
         # Add 3 hosts to each switch on ports 1-3
-        for sNum, s in enumerate(["s1", "s2", "s3"]):
+        for s in ["s1", "s2", "s3"]:
             switch = self.addSwitch(s)
             switches.append(switch)
 
-            for i in range(1, 4):
-                hostNum = (sNum * 3) + i
-                host = self.addHost(
-                    "h%d" % hostNum,
-                    ip="%d.0.0.%d" % (sNum + 10, i),
-                    mac="00:00:00:00:00:%02x" % hostNum
-                )
-                self.addLink(host, switch, port2=i)
+        host = self.addHost("h1", ip="10.0.0.1", mac="00:00:00:00:00:01")
+        self.addLink(host, switches[0], port2=1)
+        host = self.addHost("h2", ip="10.0.0.2", mac="00:00:00:00:00:02")
+        self.addLink(host, switches[0], port2=2)
+        host = self.addHost("h3", ip="10.0.0.3", mac="00:00:00:00:00:03")
+        self.addLink(host, switches[0], port2=3)
+
+        host = self.addHost("h4", ip="11.0.0.1", mac="00:00:00:00:00:04")
+        self.addLink(host, switches[1], port2=1)
+        host = self.addHost("h5", ip="11.0.0.2", mac="00:00:00:00:00:05")
+        self.addLink(host, switches[1], port2=2)
+        host = self.addHost("h6", ip="11.0.0.3", mac="00:00:00:00:00:06")
+        self.addLink(host, switches[1], port2=3)
+
+        host = self.addHost("h7", ip="12.0.0.1", mac="00:00:00:00:00:07")
+        self.addLink(host, switches[2], port2=1)
+        host = self.addHost("h8", ip="12.0.0.2", mac="00:00:00:00:00:08")
+        self.addLink(host, switches[2], port2=2)
+        host = self.addHost("h9", ip="12.0.0.3", mac="00:00:00:00:00:09")
+        self.addLink(host, switches[2], port2=3)
 
         # Connect port 4 on s1 to port 4 on s2
         self.addLink(switches[0], switches[1], port1=4, port2=4)

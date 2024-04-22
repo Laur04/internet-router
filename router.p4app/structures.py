@@ -1,4 +1,5 @@
-from scapy.fields import ByteField, IntField, ShortField, SignedLongField
+from scapy.compat import Optional, Tuple
+from scapy.fields import ByteField, IntField, PacketListField, ShortField, SignedLongField
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import IP, SourceIPField
 from scapy.layers.l2 import Ether, ARP
@@ -43,16 +44,6 @@ class pwospfHello(Packet):
 
 bind_layers(pwospfHeader, pwospfHello, type=1)
 
-class pwospfLSU(Packet):
-    name = "pwospfLSU"
-    fields_desc = [
-        ShortField("sequence", None),
-        ShortField("ttl", None),
-        IntField("numAdvertisements", None),
-    ]
-
-bind_layers(pwospfHeader, pwospfLSU, type=4)
-
 class pwospfLink(Packet):
     name = "pwospfLink"
     fields_desc = [
@@ -60,9 +51,22 @@ class pwospfLink(Packet):
         IntField("mask", None),
         SourceIPField("routerID", None),
     ]
+    def extract_padding(self, s):
+        return '', s
 
-bind_layers(pwospfLSU, pwospfLink)
-bind_layers(pwospfLink, pwospfLink)
+
+class pwospfLSU(Packet):
+    name = "pwospfLSU"
+    fields_desc = [
+        ShortField("sequence", None),
+        ShortField("ttl", None),
+        IntField("numAdvertisements", None),
+        PacketListField("advs", None, pwospfLink, length_from=lambda pkt:pkt.numAdvertisements * 12)
+    ]
+    def extract_padding(self, s):
+        return '', s
+
+bind_layers(pwospfHeader, pwospfLSU, type=4)
 
 class Interface():
     def __init__(self, ip_address, subnet, mask, port, hello_int):
@@ -91,7 +95,7 @@ class Graph:
 
     def add_edge(self, u, v, rid, update_time):
         updated = False
-        if 0 <= u < self.size and 0 <= v < self.size:
+        if 0 <= u < self.size and 0 <= v < self.size and u != v:
             if not (self.adj_matrix[u][v] == self.adj_matrix[v][u] == rid):
                 self.adj_matrix[u][v] = rid
                 self.adj_matrix[v][u] = rid
@@ -112,28 +116,26 @@ class Graph:
 
     def add_vertex_data(self, data):
         # Try to find existing entry and return its index
-        for i, sw in enumerate(self.vertex_data):
-            try:
-                if data == sw:
-                    return i, False
-            except:
-                pass
+        try:
+            i = self.vertex_data.index(data)
+            return i, False
+        except ValueError:
         # If there is no existing entry add one and return its index
-        self.vertex_data[self.current_size] = data
-        self.current_size += 1
-        return self.current_size - 1, True
+            self.vertex_data[self.current_size] = data
+            self.current_size += 1
+            return self.current_size - 1, True
 
     def add_switch_data(self, data, rid):
         # Try to find existing entry and return its index
         for i, sw in enumerate(self.vertex_data):
-            try:
-                if rid in sw.keys():
-                    sw[rid].append(data)
-                    return i, False
-            except:
-                pass
+            if isinstance(sw, dict) and rid in sw.keys():
+                sw[rid].append(data)
+                return i, False
         # If there is no existing entry add one and return its index
-        self.vertex_data[self.current_size] = {rid: data}
+        if data is None:
+            self.vertex_data[self.current_size] = {rid: []}
+        else:
+            self.vertex_data[self.current_size] = {rid: [data]}
         self.current_size += 1
         return self.current_size - 1, True
     
@@ -167,7 +169,7 @@ class Graph:
 
     def get_firsts(self, start_ind):
         distances, predecessors = self.dijkstra(start_ind)
-        first_hops = []
+        first_hops = [0 for _ in range(len(distances))]
         for i, _ in enumerate(distances):
             first = None
             current = i

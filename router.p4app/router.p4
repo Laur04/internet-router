@@ -166,8 +166,13 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
     }
 
     action trigger_arp_req() {
+        hdr.cpu_metadata.setValid();
+        hdr.cpu_metadata.origEtherType = hdr.ethernet.etherType;
+        hdr.cpu_metadata.origSrcPort = (bit<16>) standard_metadata.egress_spec;
         hdr.cpu_metadata.awaitingARP = 1;
-        send_to_controller();
+        hdr.ethernet.etherType = TYPE_CPU_METADATA;
+        hdr.ethernet.dstAddr = CPU_MAC;
+        standard_metadata.egress_spec = CPU_PORT;
     }
 
     action forward_local(port_t dstPort) {
