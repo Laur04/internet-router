@@ -212,8 +212,11 @@ class Controller(Thread):
     def calculateRoutes(self):
         new_first_hops = self.graph.get_firsts(self.vertex_ind)
 
-        for i, vertex in enumerate(self.graph.vertex_data):
+        updated_routes = []
+        for i, vertex in enumerate(self.graph.vertex_data):  # for each subnet "vertex" that isn't the start vertex 
             if vertex != 0 and i != self.vertex_ind:
+
+                # find the interface associated with the first hop
                 for intf in self.interfaces.values():
                     if (intf.subnet, intf.mask) == new_first_hops[i]:
                         port = intf.port
@@ -221,13 +224,17 @@ class Controller(Thread):
                             next_hop = list(intf.neighbors.values())[0].ip_address
                         except IndexError:
                             next_hop = None
-                        break                                        
+                        break                               
                 try:
                     matches = [[ip, 32] for ip in vertex[list(vertex.keys())[0]]]
                 except:
                     matches = [vertex]
+
+                # if there is an interface
                 if port and next_hop:
+                    # for all the IPs in the subnet "vertex"
                     for m in matches:
+                        # if the route is new
                         if tuple(m) not in self.routing:
                             self.routing[tuple(m)] = (next_hop, port)
                             self.sw.insertTableEntry(
@@ -251,6 +258,17 @@ class Controller(Thread):
                                     action_params={'nextHop': next_hop, 'port': port}
                                 )
                                 self.routing[tuple(m)] = (next_hop, port)
+                        updated_routes.append(tuple(m))
+        
+        # remove any routes that aren't here anymore
+        for subnet_tuple in self.routing.keys():
+            if subnet_tuple not in updated_routes:
+                del self.routing[subnet_tuple]
+                self.sw.removeTableEntry(
+                    table_name='MyIngress.routing',
+                    match_fields={'hdr.ipv4.dstAddr': subnet_tuple},
+                    action_name='MyIngress.ipv4_forward'
+                )
 
     def handleLSU(self, pkt):
         receivingInt = self.interfaces[pkt[CPUMetadata].origSrcPort]
