@@ -137,6 +137,10 @@ control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
 
 control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadata_t standard_metadata) {
 
+    counter(1, CounterType.packets) controller_count;
+    counter(1, CounterType.packets) arp_count;
+    counter(1, CounterType.packets) ip_count;
+
     action cpu_meta_encap() {
         hdr.cpu_metadata.setValid();
         hdr.cpu_metadata.origEtherType = hdr.ethernet.etherType;
@@ -152,6 +156,7 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
         cpu_meta_encap();
         hdr.ethernet.etherType = TYPE_CPU_METADATA;
         hdr.ethernet.dstAddr = CPU_MAC;
+        controller_count.count(0);
         standard_metadata.egress_spec = CPU_PORT;
     }
 
@@ -172,6 +177,7 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
         hdr.cpu_metadata.awaitingARP = 1;
         hdr.ethernet.etherType = TYPE_CPU_METADATA;
         hdr.ethernet.dstAddr = CPU_MAC;
+        controller_count.count(0);
         standard_metadata.egress_spec = CPU_PORT;
     }
 
@@ -224,6 +230,7 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
         
         if (hdr.ethernet.etherType == TYPE_IPV4) {
             if (hdr.ipv4.isValid()) {
+                ip_count.count(0);
                 if (hdr.ipv4.protocol == TYPE_PWOSPF) {
                     if (standard_metadata.ingress_port != CPU_PORT) {
                         send_to_controller();
@@ -260,6 +267,7 @@ control MyIngress(inout headers hdr, inout metadata meta, inout standard_metadat
             }
         } else if (hdr.ethernet.etherType == TYPE_ARP) {
             if (hdr.arp.isValid()) {
+                arp_count.count(0);
                 if (standard_metadata.ingress_port != CPU_PORT) {
                     send_to_controller();
                 } else {

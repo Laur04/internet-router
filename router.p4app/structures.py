@@ -81,8 +81,6 @@ class Neighbor():
         self.ip_address = ip_address
         self.rid = rid
         self.last_seen = time
-        self.send_sequence = 0
-        self.rec_sequence = 0
 
 class Graph:
     def __init__(self):

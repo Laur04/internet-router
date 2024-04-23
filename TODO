@@ -1,7 +1,5 @@
-- Write timeouts for ARP, PWOSPF
-- Maintain sequence updates
-- Write counters for IP packets, ARP packets, packets forwarded to controller
-- Verify and update checksums for IP, pwospf, ICMP
+(2) Write timeouts for ARP, PWOSPF
+(4) Send unreachable messages/handle bad packets
+(5) Verify and update checksums for IP, pwospf, ICMP
+
 - Test and verify: shortest path test
-- Send unreachable messages/handle bad packets
-- Debug flooding issue

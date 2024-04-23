@@ -41,6 +41,7 @@ class Controller(threading.Thread):
         self.waitingForARP = {}  # tracks packets waiting for an ARP response
         self.graph = Graph()  # initializes OSPF graph
         self.interfaces = {}  # tracks PWOSPF interfaces associated with this router
+        self.lsu_sequence_numbers = {switch_ip: 0}  # tracks the current sequence number for each LSU
 
         # Configure PWOSPF
         self.router_id = switch_ip
@@ -173,13 +174,13 @@ class Controller(threading.Thread):
                     / pwospfHeader(type=4, packetLength=32 + (12 * count), routerID=self.router_id, areaID=self.area_id, checksum=0) \
                 
                 # Add the LSU and updates
-                lsu = pwospfLSU(sequence = neighbor.send_sequence, ttl = 254, numAdvertisements = count)
+                lsu = pwospfLSU(sequence = self.lsu_sequence_numbers[self.router_id], ttl = 254, numAdvertisements = count)
                 for update in updates:
                     lsu /= update
                 pkt /= lsu
 
                 # Update the sequence
-                neighbor.send_sequence += 1
+                self.lsu_sequence_numbers[self.router_id] += 1
 
                 self.send(pkt)
 
@@ -208,7 +209,12 @@ class Controller(threading.Thread):
         if pkt[IP].src not in receivingInt.neighbors.keys():
             return
         # If the packet has an old sequence number, drop it
-            #TODO
+        if rid in self.lsu_sequence_numbers.keys():
+            if pkt[pwospfLSU].sequence <= self.lsu_sequence_numbers[rid]:
+                return
+            self.lsu_sequence_numbers[rid] = pkt[pwospfLSU].sequence
+        else:
+           self.lsu_sequence_numbers[rid] = pkt[pwospfLSU].sequence 
                                 
         # Update the database
         updated = False
@@ -232,8 +238,6 @@ class Controller(threading.Thread):
                     for n_ip in intf.neighbors:
                         neighbor = intf.neighbors[n_ip]
                         if n_ip != pkt[IP].src:
-                            pkt[pwospfLSU].sequence = neighbor.send_sequence
-                            neighbor.send_sequence += 1
                             pkt[pwospfLSU].ttl -= 1
                             pkt[CPUMetadata].origSrcPort = port
                             pkt[IP].src = intf.ip_address
