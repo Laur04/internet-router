@@ -1,7 +1,11 @@
-from scapy.fields import ByteField, IntField, PacketListField, ShortField, SignedLongField
+from threading import Timer
+
+from scapy.compat import chb
+from scapy.fields import ByteField, IntField, PacketListField, ShortField, SignedLongField, XShortField
 from scapy.packet import Packet, bind_layers
 from scapy.layers.inet import IP, SourceIPField
 from scapy.layers.l2 import Ether, ARP
+from scapy.utils import checksum
 
 
 TYPE_CPU_METADATA = 0x080a
@@ -26,10 +30,16 @@ class pwospfHeader(Packet):
         ShortField("packetLength", None),
         SourceIPField("routerID", None),
         IntField("areaID", None),
-        ShortField("checksum", None),
+        XShortField("chksum", None),
         ShortField("autype", 0),
         SignedLongField("authentication", 0),
     ]
+    def post_build(self, p, pay):
+        p += pay
+        if self.chksum is None:
+            ck = checksum(p)
+            p = p[:2] + chb(ck >> 8) + chb(ck & 0xff) + p[4:]
+        return p
 
 bind_layers(IP, pwospfHeader, proto=89)
 
@@ -77,10 +87,10 @@ class Interface():
         self.neighbors = dict()
 
 class Neighbor():
-    def __init__(self, ip_address, rid, time):
+    def __init__(self, ip_address, rid):
         self.ip_address = ip_address
         self.rid = rid
-        self.last_seen = time
+        self.last_seen = None
 
 class Graph:
     def __init__(self):
@@ -177,3 +187,8 @@ class Graph:
                     break
             first_hops[i] = first
         return first_hops
+
+class ContinuousTimer(Timer):
+    def run(self):
+        while not self.finished.wait(self.interval):
+            self.function(*self.args, **self.kwargs)

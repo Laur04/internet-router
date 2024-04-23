@@ -1,9 +1,11 @@
-import threading, time
+from threading import Thread, Timer
+import time
+
 from scapy.all import sendp, sniff
 from scapy.layers.inet import ICMP, IP
 from scapy.layers.l2 import Ether, ARP
 
-from structures import CPUMetadata, Graph, Interface, Neighbor, pwospfHeader, pwospfHello, pwospfLink, pwospfLSU
+from structures import ContinuousTimer, CPUMetadata, Graph, Interface, Neighbor, pwospfHeader, pwospfHello, pwospfLink, pwospfLSU
 
 
 ARP_OP_REQ   = 0x0001
@@ -11,7 +13,7 @@ ARP_OP_REPLY = 0x0002
 BCAST_GRP    = 0x1
 
 
-class Controller(threading.Thread):
+class Controller(Thread):
     ###########################
     # Basic control functions #
     ###########################
@@ -88,10 +90,10 @@ class Controller(threading.Thread):
     def run(self):
         # Start hello timers on each interface
         for intf in self.interfaces.values():
-            threading.Timer(intf.hello_int, self.send_pwospf_hello, args=(intf,)).start()
+            ContinuousTimer(intf.hello_int, self.send_pwospf_hello, args=(intf,)).start()
 
         # Start lsu timer
-        threading.Timer(self.lsu_int, self.send_pwospf_lsu).start()
+        ContinuousTimer(self.lsu_int, self.send_pwospf_lsu).start()
 
         # Start packet sniffer
         sniff(iface=self.controller_iface, prn=self.handlePkt)
@@ -109,6 +111,7 @@ class Controller(threading.Thread):
                 action_params={'dstMac': mac}
             )
             self.mac_for_ip[ip] = mac
+            Timer(120, self.timeout_arp, args=(ip,))
 
     def send_arp_request(self, pkt):
         pkt = Ether() \
@@ -125,6 +128,15 @@ class Controller(threading.Thread):
         
         self.send(pkt)
 
+    def timeout_arp(self, ip):
+        if ip in self.mac_for_ip:
+            del self.mac_for_ip[ip]
+            self.sw.removeTableEntry(
+                table_name='MyIngress.arp',
+                match_field={'meta.nextHop': [ip]},
+                action_name='MyIngress.set_dst_mac'
+            )
+
 
     ####################
     # PWOSPF functions #
@@ -138,10 +150,6 @@ class Controller(threading.Thread):
             /  pwospfHello(networkMask = intf.mask, helloInt = intf.hello_int)
 
         self.send(pkt)
-
-        # Restart hello timer
-        time.sleep(intf.hello_int)
-        self.send_pwospf_hello(intf)
 
     def create_lsu(self):
         count = 0
@@ -183,10 +191,6 @@ class Controller(threading.Thread):
                 self.lsu_sequence_numbers[self.router_id] += 1
 
                 self.send(pkt)
-
-        # Restart lsu timer
-        time.sleep(self.lsu_int)
-        self.send_pwospf_lsu()
     
     def handleHello(self, pkt):
         if pkt[IP].dst != "224.0.0.5":
@@ -197,9 +201,10 @@ class Controller(threading.Thread):
             return
 
         if pkt[IP].src in receivingInt.neighbors.keys():
-            receivingInt.neighbors[pkt[IP].src].last_seen = time.perf_counter()
+            receivingInt.neighbors[pkt[IP].src].last_seen.cancel()
         else:
-            receivingInt.neighbors.update({pkt[IP].src: Neighbor(pkt[IP].src, pkt[pwospfHeader].routerID, time=time.perf_counter())})
+            receivingInt.neighbors.update({pkt[IP].src: Neighbor(pkt[IP].src, pkt[pwospfHeader].routerID)})
+        receivingInt.neighbors[pkt[IP].src].last_seen = Timer(receivingInt.hello_int * 3, self.timeout_hello, args=(receivingInt, pkt[IP].src))
 
     def handleLSU(self, pkt):
         receivingInt = self.interfaces[pkt[CPUMetadata].origSrcPort]
@@ -287,10 +292,7 @@ class Controller(threading.Thread):
                                     )
                                     self.routing[tuple(m)] = (next_hop, port)
 
-    def timeout_arp(self):
-        pass
-
-    def timeout_hello(self):
+    def timeout_hello(self, recvIntf, nIP):
         pass
 
     def timeout_lsu(self):
@@ -326,7 +328,9 @@ class Controller(threading.Thread):
             elif pkt[IP].dst in self.ip_list:  # If the packet is destined for the router, but wasn't pwospf
                 if ICMP in pkt:  # Handle ICMP
                     self.handleICMP(pkt)
-        
+            else:  # The packet is here because there is no route for it
+                self.handleUnreachable(pkt, 0)
+
         # Process ARP packets
         elif ARP in pkt:
             # If the packet is an ARP request 
@@ -357,6 +361,8 @@ class Controller(threading.Thread):
                         sendp(p, iface=self.controller_iface, verbose=False)
                     self.waitingForARP.pop(src)
                     time.sleep(1)
+        
+        # Print and drop any incorrect packets that didn't meet any of the above statements
 
     def addLocalRoute(self, ip, port):
         # Don't add entries if they are IPs that belong to the router
@@ -375,8 +381,14 @@ class Controller(threading.Thread):
 
     def handleICMP(self, pkt):
         pkt[ICMP].type = 0
+        pkt[ICMP].chksum = None  # should force checksum to recalculate
         pkt[IP].src, pkt[IP].dst = pkt[IP].dst, pkt[IP].src
         self.send(pkt)
+    
+    def handleUnreachable(self, pkt, code):
+        pkt[IP].src, pkt[IP].dst = pkt[IP].dst, pkt[IP].src
+        icmp = ICMP(type=3, code=code)
+        self.send(pkt / icmp)
 
     def send(self, pkt):
         assert CPUMetadata in pkt, "Controller must send packets with special header"

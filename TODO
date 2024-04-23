@@ -1,5 +1,3 @@
-(2) Write timeouts for ARP, PWOSPF
-(4) Send unreachable messages/handle bad packets
-(5) Verify and update checksums for IP, pwospf, ICMP
-
-- Test and verify: shortest path test
+- Write timeouts for PWOSPF
+- Send unreachable for timeout ARP queue
+- Shortest path, late join test
