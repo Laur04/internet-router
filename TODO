@@ -1,3 +1,1 @@
-- Write timeouts for PWOSPF
-- Send unreachable for timeout ARP queue
-- Shortest path, late join test
+- delete old entries on timeout

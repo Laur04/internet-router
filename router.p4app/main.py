@@ -25,7 +25,6 @@ def single_sw_test():
 
 
 # Triple switch test
-
 def triple_sw_test():
     topo = TripleSwitchTopo()
 
@@ -96,3 +95,5 @@ def triple_sw_test():
 
 # single_sw_test()
 triple_sw_test()
+# shortest path test
+# late join test

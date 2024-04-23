@@ -22,6 +22,7 @@ class Controller(Thread):
         # General configuration
         self.sw = sw  # store switch object
         self.controller_iface = sw.intfs[1].name  # determine interface between switch and this controller
+        self.lsu_timer = None
         
         # Configure MAC for all ports
         self.mac = mac
@@ -93,7 +94,7 @@ class Controller(Thread):
             ContinuousTimer(intf.hello_int, self.send_pwospf_hello, args=(intf,)).start()
 
         # Start lsu timer
-        ContinuousTimer(self.lsu_int, self.send_pwospf_lsu).start()
+        self.lsu_timer = ContinuousTimer(self.lsu_int, self.send_pwospf_lsu).start()
 
         # Start packet sniffer
         sniff(iface=self.controller_iface, prn=self.handlePkt)
@@ -103,14 +104,14 @@ class Controller(Thread):
     # ARP functions #
     #################
     def addMacAddr(self, ip, mac):
-        if ip not in self.mac_for_ip:
+        if str(ip) not in self.mac_for_ip:
             self.sw.insertTableEntry(
                 table_name='MyIngress.arp',
                 match_fields={'meta.nextHop': [ip]},
                 action_name='MyIngress.set_dst_mac',
                 action_params={'dstMac': mac}
             )
-            self.mac_for_ip[ip] = mac
+            self.mac_for_ip[str(ip)] = mac
             Timer(120, self.timeout_arp, args=(ip,))
 
     def send_arp_request(self, pkt):
@@ -130,7 +131,7 @@ class Controller(Thread):
 
     def timeout_arp(self, ip):
         if ip in self.mac_for_ip:
-            del self.mac_for_ip[ip]
+            del self.mac_for_ip[str(ip)]
             self.sw.removeTableEntry(
                 table_name='MyIngress.arp',
                 match_field={'meta.nextHop': [ip]},
@@ -142,11 +143,12 @@ class Controller(Thread):
     # PWOSPF functions #
     ####################
     def send_pwospf_hello(self, intf):
+        print("sending hello for", self.router_id)
         # Create and send hello packet
         pkt = Ether() \
             / CPUMetadata(origEtherType = 0x0800, origSrcPort = intf.port) \
             / IP(proto=89, src=intf.ip_address, dst="224.0.0.5") \
-            / pwospfHeader(type=0x01, packetLength=32, routerID=self.router_id, areaID=self.area_id, checksum=0) \
+            / pwospfHeader(type=0x01, packetLength=32, routerID=self.router_id, areaID=self.area_id, chksum=None) \
             /  pwospfHello(networkMask = intf.mask, helloInt = intf.hello_int)
 
         self.send(pkt)
@@ -169,6 +171,7 @@ class Controller(Thread):
         return count, update
 
     def send_pwospf_lsu(self):
+        print("sending lsus for", self.router_id)
         # Get updates
         count, updates = self.create_lsu()
 
@@ -179,7 +182,7 @@ class Controller(Thread):
                 pkt = Ether() \
                     / CPUMetadata(origEtherType = 0x0800, origSrcPort = port) \
                     / IP(proto=89, src=self.interfaces[port].ip_address, dst=neighbor.ip_address) \
-                    / pwospfHeader(type=4, packetLength=32 + (12 * count), routerID=self.router_id, areaID=self.area_id, checksum=0) \
+                    / pwospfHeader(type=4, packetLength=32 + (12 * count), routerID=self.router_id, areaID=self.area_id, chksum=None) \
                 
                 # Add the LSU and updates
                 lsu = pwospfLSU(sequence = self.lsu_sequence_numbers[self.router_id], ttl = 254, numAdvertisements = count)
@@ -204,7 +207,50 @@ class Controller(Thread):
             receivingInt.neighbors[pkt[IP].src].last_seen.cancel()
         else:
             receivingInt.neighbors.update({pkt[IP].src: Neighbor(pkt[IP].src, pkt[pwospfHeader].routerID)})
-        receivingInt.neighbors[pkt[IP].src].last_seen = Timer(receivingInt.hello_int * 3, self.timeout_hello, args=(receivingInt, pkt[IP].src))
+        receivingInt.neighbors[pkt[IP].src].last_seen = Timer(receivingInt.hello_int * 3, self.timeout_hello, args=(receivingInt, pkt[IP].src, pkt[pwospfHeader].routerID))
+
+    def calculateRoutes(self):
+        new_first_hops = self.graph.get_firsts(self.vertex_ind)
+
+        for i, vertex in enumerate(self.graph.vertex_data):
+            if vertex != 0 and i != self.vertex_ind:
+                for intf in self.interfaces.values():
+                    if (intf.subnet, intf.mask) == new_first_hops[i]:
+                        port = intf.port
+                        try:
+                            next_hop = list(intf.neighbors.values())[0].ip_address
+                        except IndexError:
+                            next_hop = None
+                        break                                        
+                try:
+                    matches = [[ip, 32] for ip in vertex[list(vertex.keys())[0]]]
+                except:
+                    matches = [vertex]
+                if port and next_hop:
+                    for m in matches:
+                        if tuple(m) not in self.routing:
+                            self.routing[tuple(m)] = (next_hop, port)
+                            self.sw.insertTableEntry(
+                                table_name='MyIngress.routing',
+                                match_fields={'hdr.ipv4.dstAddr': m},
+                                action_name='MyIngress.ipv4_forward',
+                                action_params={'nextHop': next_hop, 'port': port}
+                            )
+                        else:
+                            # if the route has been updated
+                            if self.routing[tuple(m)] != (next_hop, port):
+                                self.sw.removeTableEntry(
+                                    table_name='MyIngress.routing',
+                                    match_fields={'hdr.ipv4.dstAddr': m},
+                                    action_name='MyIngress.ipv4_forward'
+                                )
+                                self.sw.insertTableEntry(
+                                    table_name='MyIngress.routing',
+                                    match_fields={'hdr.ipv4.dstAddr': m},
+                                    action_name='MyIngress.ipv4_forward',
+                                    action_params={'nextHop': next_hop, 'port': port}
+                                )
+                                self.routing[tuple(m)] = (next_hop, port)
 
     def handleLSU(self, pkt):
         receivingInt = self.interfaces[pkt[CPUMetadata].origSrcPort]
@@ -231,10 +277,9 @@ class Controller(Thread):
             else:
                 vertex, updated = self.graph.add_switch_data(lsu.subnet, rid)
                 verticies.add(vertex)
-        t = time.perf_counter()
         for v1 in verticies:
             for v2 in verticies:
-                updated = self.graph.add_edge(v1, v2, rid, t) or updated
+                updated = self.graph.add_edge(v1, v2, rid, Timer(self.lsu_int * 3, self.timeout_lsu, args=(v1, v2, rid))) or updated
 
         if updated:
             # Flood the packet
@@ -248,55 +293,29 @@ class Controller(Thread):
                             pkt[IP].src = intf.ip_address
                             pkt[IP].dst = neighbor.ip_address
                             self.send(pkt)
-
+                            
             # Run Djikstra's algorithm to recompute the forwarding table
-            new_first_hops = self.graph.get_firsts(self.vertex_ind)
+            self.calculateRoutes()
 
-            for i, vertex in enumerate(self.graph.vertex_data):
-                if vertex != 0 and i != self.vertex_ind:
-                    for intf in self.interfaces.values():
-                        if (intf.subnet, intf.mask) == new_first_hops[i]:
-                            port = intf.port
-                            try:
-                                next_hop = list(intf.neighbors.values())[0].ip_address
-                            except IndexError:
-                                next_hop = None
-                            break                                        
-                    try:
-                        matches = [[ip, 32] for ip in vertex[list(vertex.keys())[0]]]
-                    except:
-                        matches = [vertex]
-                    if port and next_hop:
-                        for m in matches:
-                            if tuple(m) not in self.routing:
-                                self.routing[tuple(m)] = (next_hop, port)
-                                self.sw.insertTableEntry(
-                                    table_name='MyIngress.routing',
-                                    match_fields={'hdr.ipv4.dstAddr': m},
-                                    action_name='MyIngress.ipv4_forward',
-                                    action_params={'nextHop': next_hop, 'port': port}
-                                )
-                            else:
-                                # if the route has been updated
-                                if self.routing[tuple(m)] != (next_hop, port):
-                                    self.sw.removeTableEntry(
-                                        table_name='MyIngress.routing',
-                                        match_fields={'hdr.ipv4.dstAddr': m},
-                                        action_name='MyIngress.ipv4_forward'
-                                    )
-                                    self.sw.insertTableEntry(
-                                        table_name='MyIngress.routing',
-                                        match_fields={'hdr.ipv4.dstAddr': m},
-                                        action_name='MyIngress.ipv4_forward',
-                                        action_params={'nextHop': next_hop, 'port': port}
-                                    )
-                                    self.routing[tuple(m)] = (next_hop, port)
+    def timeout_hello(self, recvIntf, nIP, rid):
+        print("timing out hello for", rid)
+        del recvIntf.neighbors[nIP]
+        if rid in self.graph.lsu_timeouts:
+            for v1, v2 in self.graph.lsu_timeouts[rid].keys():
+                self.graph.remove_edge(v1, v2, rid)
+        del self.graph.lsu_timeouts[rid]
 
-    def timeout_hello(self, recvIntf, nIP):
-        pass
+        self.calculateRoutes()
+        self.lsu_timer.cancel()
+        self.lsu_timer = ContinuousTimer(self.lsu_int, self.send_pwospf_lsu).start()
 
-    def timeout_lsu(self):
-        pass
+    def timeout_lsu(self, v1, v2, rid):
+        print("timing out lsu for", rid)
+        self.graph.remove_edge(v1, v2, rid)
+
+        self.calculateRoutes()
+        self.lsu_timer.cancel()
+        self.lsu_timer = ContinuousTimer(self.lsu_int, self.send_pwospf_lsu).start()
 
 
     #######################################
@@ -329,7 +348,8 @@ class Controller(Thread):
                 if ICMP in pkt:  # Handle ICMP
                     self.handleICMP(pkt)
             else:  # The packet is here because there is no route for it
-                self.handleUnreachable(pkt, 0)
+                if not (pkt[IP].dst, 32) in self.routing and not pkt[IP].dst in self.port_for_local_ip.values():
+                    self.handleUnreachable(pkt, 0)
 
         # Process ARP packets
         elif ARP in pkt:
@@ -360,9 +380,6 @@ class Controller(Thread):
                         p[CPUMetadata].awaitingARP = 0
                         sendp(p, iface=self.controller_iface, verbose=False)
                     self.waitingForARP.pop(src)
-                    time.sleep(1)
-        
-        # Print and drop any incorrect packets that didn't meet any of the above statements
 
     def addLocalRoute(self, ip, port):
         # Don't add entries if they are IPs that belong to the router
@@ -386,9 +403,14 @@ class Controller(Thread):
         self.send(pkt)
     
     def handleUnreachable(self, pkt, code):
+        print("unreachable for", pkt[IP].src, pkt[IP].dst, "on", self.router_id)
         pkt[IP].src, pkt[IP].dst = pkt[IP].dst, pkt[IP].src
-        icmp = ICMP(type=3, code=code)
-        self.send(pkt / icmp)
+        if ICMP in pkt:
+            pkt[ICMP].type=3
+            pkt[ICMP].code=code
+        else:
+            pkt = pkt / ICMP(type=3, code=code)
+        self.send(pkt)
 
     def send(self, pkt):
         assert CPUMetadata in pkt, "Controller must send packets with special header"

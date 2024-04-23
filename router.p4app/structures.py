@@ -97,21 +97,41 @@ class Graph:
         self.current_size = 0
         self.size = 64  # setting initial size of 64x64
         self.adj_matrix = [[0] * self.size for _ in range(self.size)]
-        self.time_matrix = [[0] * self.size for _ in range(self.size)]
         self.vertex_data = [0 for _ in range(self.size)]
+        self.lsu_timeouts = {}
 
-    def add_edge(self, u, v, rid, update_time):
+    def add_edge(self, u, v, rid, timeout):
         updated = False
         if 0 <= u < self.size and 0 <= v < self.size and u != v:
+            # Add link to the graph
             if not (self.adj_matrix[u][v] == self.adj_matrix[v][u] == rid):
                 self.adj_matrix[u][v] = rid
                 self.adj_matrix[v][u] = rid
                 updated = True
-            if not (self.time_matrix[u][v] == self.time_matrix[v][u] == update_time):
-                self.time_matrix[u][v] = update_time
-                self.time_matrix[v][u] = update_time
-                updated = True
+            
+            # Add or update the timer
+            if rid in self.lsu_timeouts:
+                if (min(u, v), max(u, v)) in self.lsu_timeouts[rid]:
+                    self.lsu_timeouts[rid][(min(u, v), max(u, v))].cancel()
+                    self.lsu_timeouts[rid][(min(u, v), max(u, v))] = timeout
+                else:
+                    self.lsu_timeouts[rid].update({(min(u, v), max(u, v)): timeout})
+            else:
+                self.lsu_timeouts.update({rid: {(min(u, v), max(u, v)): timeout}})
+            
             return updated
+        
+    def remove_edge(self, u, v, rid):
+        # Remove any timeouts associated with this link
+        if rid in self.lsu_timeouts and (min(u, v), max(u, v)) in self.lsu_timeouts[rid]:
+            try:
+                self.lsu_timeouts[rid][(min(u, v), max(u, v))].cancel()
+            except:
+                pass
+            del self.lsu_timeouts[rid][(min(u, v), max(u, v))]
+            
+            self.adj_matrix[u][v] = 0
+            self.adj_matrix[v][u] = 0
 
     def connect_range(self, rid, vertex, start=None, stop=None):
         if start is None:
