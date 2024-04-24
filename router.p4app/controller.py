@@ -83,6 +83,7 @@ class Controller(Thread):
 
     def start(self, *args, **kwargs):
         super(Controller, self).start(*args, **kwargs)
+        print("Starting", self.router_id)
         time.sleep(0.3)
 
     def join(self, *args, **kwargs):
@@ -143,7 +144,6 @@ class Controller(Thread):
     # PWOSPF functions #
     ####################
     def send_pwospf_hello(self, intf):
-        print("sending hello for", self.router_id)
         # Create and send hello packet
         pkt = Ether() \
             / CPUMetadata(origEtherType = 0x0800, origSrcPort = intf.port) \
@@ -171,7 +171,6 @@ class Controller(Thread):
         return count, update
 
     def send_pwospf_lsu(self):
-        print("sending lsus for", self.router_id)
         # Get updates
         count, updates = self.create_lsu()
 
@@ -316,7 +315,7 @@ class Controller(Thread):
             self.calculateRoutes()
 
     def timeout_hello(self, recvIntf, nIP, rid):
-        print("timing out hello for", rid)
+        print(self.router_id, ": Timing out Hello for", rid)
         del recvIntf.neighbors[nIP]
         if rid in self.graph.lsu_timeouts:
             for v1, v2 in self.graph.lsu_timeouts[rid].keys():
@@ -328,7 +327,7 @@ class Controller(Thread):
         self.lsu_timer = ContinuousTimer(self.lsu_int, self.send_pwospf_lsu).start()
 
     def timeout_lsu(self, v1, v2, rid):
-        print("timing out lsu for", rid)
+        print(self.router_id, ": Timing out LSU for", rid)
         self.graph.remove_edge(v1, v2, rid)
 
         self.calculateRoutes()
